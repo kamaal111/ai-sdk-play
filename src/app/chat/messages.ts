@@ -1,8 +1,21 @@
-import {UIDataTypes, UIMessage, UITools} from 'ai';
+import type {InferUITools, ToolSet, UIMessage} from 'ai';
+import z from 'zod';
 
 import {prisma} from '../../lib/prisma';
 
-export type Message = UIMessage<unknown, UIDataTypes, UITools>;
+const metadataSchema = z.object({}).loose();
+
+const dataPartSchema = z.object({}).loose();
+
+const tools: ToolSet = {};
+
+type MyMetadata = z.infer<typeof metadataSchema>;
+
+type MyDataPart = z.infer<typeof dataPartSchema>;
+
+type MyTools = InferUITools<typeof tools>;
+
+export type Message = UIMessage<MyMetadata, MyDataPart, MyTools>;
 
 export async function loadMessages(id: string): Promise<Array<Message>> {
     // Load messages from database
@@ -10,9 +23,6 @@ export async function loadMessages(id: string): Promise<Array<Message>> {
         where: {conversationId: id},
         orderBy: {createdAt: 'asc'},
     });
-
-    // Return empty array if no messages found (conversation doesn't exist)
-    if (dbMessages.length === 0) return [];
 
     // Convert database messages to UI messages
     return dbMessages.map(msg => {
@@ -37,6 +47,14 @@ export async function saveMessages(id: string, newMessages: Array<Message>) {
     });
 
     // Save new messages to database
+    const processedMessages: Array<{
+        id: string;
+        conversationId: string;
+        role: Message['role'];
+        content: string;
+        metadata?: any;
+    }> = [];
+
     for (const message of newMessages) {
         console.log('🔍 Processing message:', {
             id: message.id,
@@ -48,7 +66,7 @@ export async function saveMessages(id: string, newMessages: Array<Message>) {
         // Generate a unique ID if the message doesn't have one or has an empty ID
         let messageId = message.id;
         if (!messageId || messageId.trim() === '') {
-            messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            messageId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
             console.log('🆔 Generated new ID:', messageId);
         }
 
@@ -70,21 +88,27 @@ export async function saveMessages(id: string, newMessages: Array<Message>) {
         // Ensure metadata is JSON-serializable
         const sanitizedMetadata = JSON.parse(JSON.stringify(metadata));
 
-        // Use upsert to handle duplicate message IDs
-        await prisma.message.upsert({
-            where: {id: messageId}, // Use the potentially generated ID
-            update: {
-                content,
-                metadata: Object.keys(sanitizedMetadata).length > 0 ? sanitizedMetadata : undefined,
-                updatedAt: new Date(),
-            },
-            create: {
-                id: messageId, // Use the potentially generated ID
-                conversationId: id,
-                role: message.role,
-                content,
-                metadata: Object.keys(sanitizedMetadata).length > 0 ? sanitizedMetadata : undefined,
-            },
+        processedMessages.push({
+            id: messageId,
+            conversationId: id,
+            role: message.role,
+            content,
+            metadata: Object.keys(sanitizedMetadata).length > 0 ? sanitizedMetadata : undefined,
         });
     }
+
+    // Use transaction for batch operations
+    await prisma.$transaction(
+        processedMessages.map(messageData =>
+            prisma.message.upsert({
+                where: {id: messageData.id},
+                update: {
+                    content: messageData.content,
+                    metadata: messageData.metadata,
+                    updatedAt: new Date(),
+                },
+                create: messageData,
+            })
+        )
+    );
 }

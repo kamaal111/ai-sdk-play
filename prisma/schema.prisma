@@ -1,0 +1,55 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Conversation model to group related messages
+model Conversation {
+  id         String   @id @default(cuid())
+  title      String?
+  isArchived Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  messages Message[]
+
+  @@index([createdAt])
+  @@map("conversations")
+}
+
+// Message model to store individual chat messages
+model Message {
+  id             String      @id @default(cuid())
+  conversationId String
+  role           MessageRole
+  content        String
+  metadata       Json? // For storing additional data like model info, tokens, etc.
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  // Relations
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([createdAt])
+  @@index([role])
+  @@map("messages")
+}
+
+// Enum for message roles
+enum MessageRole {
+  user
+  assistant
+  system
+  function
+  tool
+}
